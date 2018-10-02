@@ -30,4 +30,4 @@ spec:
           imagePullPolicy: Always
           ports:
             - name: http
-              containerPort: 8888
+              containerPort: 5000
