@@ -8,17 +8,21 @@ spec:
   ports:
     - port: 5000
       targetPort: 5000
-      nodePort: 32001
   selector:
     app: app
-  type: NodePort
+  type: LoadBalancer
 ---
-apiVersion: extensions/v1beta1
+apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: app
+  labels:
+    app: app
 spec:
-  replicas: 2
+  replicas: 3
+  selector:
+    matchLabels:
+      app: app
   template:
     metadata:
       labels:
