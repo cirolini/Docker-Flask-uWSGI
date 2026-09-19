@@ -1,0 +1,123 @@
+# O `input "Deploy to PROD?"` de 2019, traduzido para 2026.
+#
+# No Jenkinsfile era assim:
+#
+#     stage "Deploy PROD"
+#         input "Deploy to PROD?"
+#         customImage.push('latest')
+#         sh "kubectl apply -f https://raw.githubusercontent.com/.../master/k8s_app.yaml"
+#
+# Três problemas naquelas quatro linhas:
+#
+# 1. O `input` bloqueava DENTRO de um `node {}`, segurando um executor do
+#    Jenkins enquanto esperava - possivelmente por dias. Aqui o job fica
+#    pendente sem consumir runner nenhum.
+#
+# 2. Não havia `submitter`: qualquer pessoa com acesso ao Jenkins clicava em
+#    aprovar. Aqui quem pode aprovar é definido no environment `producao`, em
+#    Settings > Environments, com revisores obrigatórios - e o GitHub registra
+#    quem aprovou, quando, e para qual execução.
+#
+# 3. Ele implantava o que estivesse por ali: a tag `latest` e um manifesto
+#    baixado de uma branch móvel. Aqui o deploy recebe um DIGEST, verifica a
+#    assinatura dele antes de tocar no cluster, e usa o manifesto do commit
+#    que está sendo implantado.
+#
+# Para ligar isto: Settings > Environments > New environment > "producao",
+# marcar "Required reviewers" e escolher quem aprova. Sem isso configurado o
+# job roda direto - o environment existe, mas sem porteiro.
+
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      digest:
+        description: "Digest da imagem (sha256:...) - não use tag"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  producao:
+    name: Implantar em produção
+    runs-on: ubuntu-24.04
+
+    # É esta linha que cria o portão. O job fica pendente até um revisor
+    # obrigatório aprovar, na própria interface da execução.
+    environment:
+      name: producao
+      url: https://exemplo.invalido
+
+    permissions:
+      contents: read
+      packages: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Normalizar o nome da imagem
+        run: echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
+      - name: Recusar qualquer coisa que não seja digest
+        run: |
+          set -euo pipefail
+          if [[ ! "${{ inputs.digest }}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::'${{ inputs.digest }}' não é um digest."
+            echo "Tag é móvel: o conteúdo por trás dela pode mudar entre a"
+            echo "aprovação e o deploy. Digest é o conteúdo."
+            exit 1
+          fi
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      # Verificar ANTES de implantar. Esta é a pergunta que o pipeline de 2019
+      # não conseguia responder: esta imagem saiu mesmo do nosso pipeline, a
+      # partir do nosso código? Sem assinatura, qualquer coisa com o nome certo
+      # no registry seria aceita.
+      - name: Verificar a assinatura da imagem
+        run: |
+          set -euo pipefail
+          cosign verify \
+            --certificate-identity-regexp "^https://github.com/${{ github.repository }}/" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "${REGISTRY}/${IMAGE_NAME}@${{ inputs.digest }}"
+
+      - name: Renderizar o manifesto deste commit
+        run: |
+          set -euo pipefail
+          cd 2026/k8s
+          kustomize edit set image \
+            "ghcr.io/cirolini/docker-flask-uwsgi=${REGISTRY}/${IMAGE_NAME}@${{ inputs.digest }}"
+          kustomize build . | tee /tmp/manifesto.yaml
+
+      # O apply de verdade fica comentado: este repositório é material de aula
+      # e não tem cluster. Num repositório real, a credencial viria de OIDC
+      # para o provedor de nuvem, não de um kubeconfig guardado como secret.
+      #
+      #   - name: Aplicar
+      #     run: |
+      #       kubectl apply -f /tmp/manifesto.yaml
+      #       kubectl annotate deployment/flask-hello \
+      #         kubernetes.io/change-cause="deploy ${{ github.sha }} por ${{ github.actor }}" --overwrite
+      #       kubectl rollout status deployment/flask-hello --timeout=180s
+      #
+      # A anotação `change-cause` substitui o `kubectl set image --record` de
+      # 2019: a flag `--record` foi removida do kubectl.
+      - name: O que seria aplicado
+        run: |
+          {
+            echo "### Deploy aprovado"
+            echo
+            echo "- imagem: \`${REGISTRY}/${IMAGE_NAME}@${{ inputs.digest }}\`"
+            echo "- assinatura verificada contra \`${{ github.repository }}\`"
+            echo "- manifesto do commit \`${{ github.sha }}\`"
+            echo
+            echo "O \`kubectl apply\` está comentado: repositório de aula, sem cluster."
+          } >> "$GITHUB_STEP_SUMMARY"

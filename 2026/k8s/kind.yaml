@@ -1,0 +1,15 @@
+# Três nós: um control-plane e dois workers.
+#
+# Dois workers, e não um, porque com um só nó o topologySpreadConstraints não
+# tem o que espalhar e o PodDisruptionBudget nunca é exercitado - as duas
+# coisas passariam despercebidas justamente na aula em que são o assunto.
+# Com dois, `make drain` mostra o PDB segurando o dreno de verdade.
+
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: flask-hello
+
+nodes:
+  - role: control-plane
+  - role: worker
+  - role: worker

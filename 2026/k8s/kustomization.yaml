@@ -1,0 +1,19 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+- deployment.yaml
+- service.yaml
+- pdb.yaml
+
+# É aqui que a imagem entra. O `make deploy` roda `kustomize edit set image`
+# com a referência exata a ser implantada - no cluster real, o digest que o
+# pipeline assinou.
+#
+# Em 2019 o Jenkinsfile fazia `kubectl apply -f <URL do raw.githubusercontent
+# na master>` e logo depois `kubectl set image` com a tag do commit: o
+# manifesto vinha de uma branch móvel, a imagem vinha do build, e os dois não
+# tinham relação nenhuma um com o outro.
+images:
+  - name: ghcr.io/cirolini/docker-flask-uwsgi
+    newTag: PLACEHOLDER

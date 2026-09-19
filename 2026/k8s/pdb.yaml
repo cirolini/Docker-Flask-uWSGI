@@ -1,0 +1,23 @@
+# PodDisruptionBudget cobre o que as sondas não cobrem: interrupção
+# VOLUNTÁRIA. Um `kubectl drain` para manutenção, um upgrade de nó, um
+# autoscaler compactando o cluster - nenhum deles consulta readiness, eles
+# consultam o PDB.
+#
+# Em 2019 não havia nenhum: um único `drain` podia levar as três réplicas ao
+# mesmo tempo e o app sumia, sem que nada no manifesto dissesse que isso era
+# inaceitável.
+#
+# minAvailable 2 de 3: o dreno acontece, um pod por vez, e o app continua de pé.
+
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: flask-hello
+  labels:
+    app.kubernetes.io/name: flask-hello
+    app.kubernetes.io/part-of: docker-flask-uwsgi
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: flask-hello

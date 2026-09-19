@@ -1,0 +1,27 @@
+# Em 2019 isto era `type: LoadBalancer`, o que provisiona (e cobra) um load
+# balancer de nuvem e expõe o app direto na internet, sem ingress, sem TLS e
+# sem política de rede na frente. Para um exemplo de aula era conta mensal por
+# descuido.
+#
+# ClusterIP + port-forward para desenvolvimento; num cluster real quem publica
+# é um Ingress ou Gateway, que sabe fazer TLS e roteamento.
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: flask-hello
+  labels:
+    app.kubernetes.io/name: flask-hello
+    app.kubernetes.io/component: web
+    app.kubernetes.io/part-of: docker-flask-uwsgi
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: flask-hello
+  ports:
+    - name: http
+      port: 80
+      # Porta por NOME, não por número. O container declara `name: http`; se
+      # amanhã a porta mudar de 5000, só o Deployment muda. Em 2019 o número
+      # 5000 estava escrito nos dois arquivos, esperando divergir.
+      targetPort: http
