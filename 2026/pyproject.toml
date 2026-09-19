@@ -1,0 +1,33 @@
+[project]
+name = "flask-hello-2026"
+version = "1.0.0"
+description = "O exemplo Flask + hostname de 2019, entregue com as práticas de 2026"
+requires-python = ">=3.14"
+
+# Versões exatas, não faixas. Em 2019 o requirements.txt dizia apenas "Flask",
+# e o mesmo arquivo instalou Flask 0.12.2 em 2018 e Flask 3.1.3 em 2026 — duas
+# versões maiores de diferença, sem um commit no meio registrando a mudança.
+dependencies = [
+    "flask==3.1.3",
+    "gunicorn==26.2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==9.0.3",
+    "ruff==0.15.4",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+
+[tool.ruff]
+target-version = "py314"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S"]
+# S101: assert é o vocabulário do pytest.
+per-file-ignores = { "tests/*" = ["S101"] }
