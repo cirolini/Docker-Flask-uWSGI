@@ -7,8 +7,9 @@
 #
 # Toda action está fixada por SHA de commit, não por tag. Tag em Git é móvel:
 # quem controla o repositório da action pode reapontar `v4` para outro código
-# a qualquer momento, e foi exatamente assim que o incidente do
-# tj-actions/changed-files vazou segredo de milhares de pipelines em 2025.
+# a qualquer momento. Foi assim que o tj-actions/changed-files foi comprometido
+# em março de 2025 (CVE-2025-30066): um token roubado reapontou as tags v1 a
+# v45.0.7 para um commit que despejava segredos nos logs públicos de build.
 # O comentário ao lado do SHA diz qual versão ele é, para dar pra ler.
 
 name: CI
