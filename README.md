@@ -147,5 +147,5 @@ cosign verify \
 
 ## Licença e uso
 
-Material de aula de **Cultura e Práticas DevOps e DevSecOps** (Unisinos).
-Use à vontade — se for usar em aula, um link de volta é bem-vindo.
+[MIT](LICENSE). Material de aula de **Cultura e Práticas DevOps e DevSecOps**
+(Unisinos) — se for usar em aula, um link de volta é bem-vindo.
