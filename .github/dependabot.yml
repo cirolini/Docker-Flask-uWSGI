@@ -1,0 +1,52 @@
+# Fixar versão sem ter um processo de atualização não é segurança, é dívida com
+# data marcada: vira exatamente a imagem de 2018 que ficou parada oito anos e
+# acumulou 50 CVEs corrigíveis. O digest fixado responde "o que foi construído";
+# o Dependabot responde "quando isso é revisado". Um sem o outro não resolve.
+#
+# 2019/ fica de fora de propósito. Aquele diretório é o registro histórico do
+# estudo de caso - atualizá-lo destruiria a comparação.
+
+version: 2
+
+updates:
+  # Imagem base do Dockerfile de 2026. O Dependabot atualiza a tag E o digest.
+  - package-ecosystem: docker
+    directory: /2026
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "chore(docker)"
+    labels: ["dependencies", "2026"]
+
+  # Dependências Python. O requirements.txt é gerado por `uv pip compile
+  # --generate-hashes`; o cabeçalho que o uv escreve no topo é o que faz o
+  # Dependabot reconhecer o arquivo como compilado e regerar os hashes junto,
+  # em vez de trocar a versão e deixar o hash antigo - o que quebraria o
+  # `--require-hashes` do build.
+  - package-ecosystem: pip
+    directory: /2026
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "chore(pip)"
+    labels: ["dependencies", "2026"]
+    groups:
+      # Patch e minor num PR só; major separado, porque major merece leitura.
+      menores:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # As próprias actions do pipeline. Elas rodam com acesso ao GITHUB_TOKEN e
+  # ao registry, então são parte da cadeia de suprimentos tanto quanto as
+  # bibliotecas do app. Estão fixadas por SHA de commit nos workflows; o
+  # Dependabot atualiza o SHA e o comentário de versão ao lado.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: "chore(actions)"
+    labels: ["dependencies", "ci"]

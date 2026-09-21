@@ -1,0 +1,205 @@
+# Pipeline de 2026 para o app em 2026/.
+#
+# O equivalente de 2019 está em 2019/Jenkinsfile, preservado para comparação:
+# 30 linhas, um registry local em 127.0.0.1, um estágio "Unit Test" cujo corpo
+# inteiro era `teste = "fullstack"`, e um `kubectl apply` de uma URL na branch
+# master. Nenhum scan, nenhum SBOM, nenhuma assinatura.
+#
+# Toda action está fixada por SHA de commit, não por tag. Tag em Git é móvel:
+# quem controla o repositório da action pode reapontar `v4` para outro código
+# a qualquer momento, e foi exatamente assim que o incidente do
+# tj-actions/changed-files vazou segredo de milhares de pipelines em 2025.
+# O comentário ao lado do SHA diz qual versão ele é, para dar pra ler.
+
+name: CI
+
+on:
+  push:
+    branches: [master]
+    paths: ["2026/**", ".github/workflows/ci.yml"]
+  pull_request:
+    paths: ["2026/**", ".github/workflows/ci.yml"]
+
+# Permissão mínima por padrão; cada job amplia só o que precisa.
+# Em 2019 o Jenkins rodava com a credencial ambiente do agente, que tinha
+# acesso a tudo que o agente tinha acesso.
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  qualidade:
+    name: Lint e testes
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: 2026
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          enable-cache: true
+
+      - name: Instalar dependências (com verificação de hash)
+        run: |
+          uv venv --python 3.14
+          uv pip install --require-hashes -r requirements-dev.txt
+
+      - name: Ruff
+        run: .venv/bin/ruff check .
+
+      - name: Pytest
+        run: .venv/bin/pytest
+
+  imagem:
+    name: Build, scan, SBOM e assinatura
+    needs: qualidade
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write # push no GHCR
+      id-token: write # OIDC para o cosign keyless
+      security-events: write # enviar o SARIF do Trivy para o Code Scanning
+    outputs:
+      digest: ${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # O nome do repositório é "cirolini/Docker-Flask-uWSGI", com maiúsculas,
+      # e nome de imagem em registry OCI precisa ser minúsculo. Sem isto o
+      # primeiro push falha com "invalid reference format".
+      - name: Normalizar o nome da imagem
+        run: echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+
+      # Sem tag `latest` para deploy. A imagem publicada em 2018 chama-se
+      # `latest` até hoje, diz "Hello World!" e o repositório diz "Hello
+      # Fullstack!" - não há como saber de que commit ela saiu. Tag imutável
+      # por SHA é o que torna rollback e auditoria possíveis.
+      - name: Calcular tags
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,format=long
+            type=ref,event=pr
+
+      - name: Build (carregado local, ainda não publicado)
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: 2026
+          load: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Escanear ANTES de publicar. Se a imagem não passar, ela não chega no
+      # registry - em 2019 a imagem ia para o registry e para produção sem
+      # ninguém nunca ter olhado o que havia dentro dela.
+      - name: Trivy (bloqueia em HIGH/CRITICAL com correção disponível)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+          format: table
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true # CVE sem correção disponível não é acionável
+          exit-code: "1"
+
+      # O relatório completo, inclusive o que não tem correção, vai para a aba
+      # Security. Bloquear no que não dá para corrigir só ensina a ignorar o
+      # scanner; registrar é diferente de barrar.
+      - name: Trivy (relatório completo para o Code Scanning)
+        if: always()
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+          format: sarif
+          output: trivy.sarif
+
+      - name: Enviar SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@977e6ceaea7361825998245d787fa3b4d6b9e5df # codeql-bundle-v2.27.0
+        continue-on-error: true
+        with:
+          sarif_file: trivy.sarif
+
+      - name: Gerar SBOM
+        uses: anchore/sbom-action@3ad7283483fc7af8ff2b4ea19663c2d5ca935e26 # v0.24.2
+        with:
+          image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+          upload-artifact: true
+
+      # A partir daqui só em push na master: PR não publica nem assina.
+      - name: Login no GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }} # token efêmero, escopo do job
+
+      - name: Publicar
+        id: push
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          imagem="${REGISTRY}/${IMAGE_NAME}:sha-${GITHUB_SHA}"
+          docker push "$imagem"
+          digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$imagem" | cut -d@ -f2)
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+          echo "Publicado: ${REGISTRY}/${IMAGE_NAME}@${digest}"
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        if: github.event_name == 'push'
+
+      # Keyless: não existe chave privada para guardar, rotacionar ou vazar.
+      # O cosign troca o token OIDC deste job por um certificado de curta
+      # duração da Fulcio e registra a assinatura no log público Rekor. Quem
+      # verificar depois consegue provar que a imagem saiu DESTE workflow,
+      # neste repositório - que é a pergunta que o pipeline de 2019 não
+      # conseguia responder de jeito nenhum.
+      - name: Assinar a imagem
+        if: github.event_name == 'push'
+        run: |
+          cosign sign --yes \
+            "${REGISTRY}/${IMAGE_NAME}@${{ steps.push.outputs.digest }}"
+
+      - name: Anexar o SBOM como atestado assinado
+        if: github.event_name == 'push'
+        run: |
+          cosign attest --yes \
+            --predicate sbom.spdx.json \
+            --type spdxjson \
+            "${REGISTRY}/${IMAGE_NAME}@${{ steps.push.outputs.digest }}"
+
+      - name: Como verificar esta imagem
+        if: github.event_name == 'push'
+        run: |
+          {
+            echo "### Imagem publicada"
+            echo
+            echo '```'
+            echo "${REGISTRY}/${IMAGE_NAME}@${{ steps.push.outputs.digest }}"
+            echo '```'
+            echo
+            echo "Verificação da assinatura (qualquer pessoa pode rodar):"
+            echo
+            echo '```bash'
+            echo "cosign verify \\"
+            echo "  --certificate-identity-regexp '^https://github.com/${{ github.repository }}/' \\"
+            echo "  --certificate-oidc-issuer https://token.actions.githubusercontent.com \\"
+            echo "  ${REGISTRY}/${IMAGE_NAME}@${{ steps.push.outputs.digest }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,83 @@
+# Mede as três imagens lado a lado e publica a tabela no resumo da execução.
+#
+# Existe por dois motivos. O primeiro é que os números do estudo de caso
+# precisam ser reproduzíveis por qualquer pessoa, não "o que deu na máquina do
+# Rafael". O segundo é que o runner do GitHub é amd64 nativo: na máquina local
+# (Apple Silicon) o build de 2019 em amd64 só roda sob emulação, e lá ele falha
+# de um jeito que não diz nada sobre o Dockerfile - o passo de compilação morre
+# sem emitir uma linha, que é assinatura de processo morto pelo qemu. Aqui a
+# pergunta "o Dockerfile de 2019 ainda constrói em amd64?" tem resposta limpa.
+#
+# Roda sob demanda e uma vez por mês: a resposta muda sozinha com o tempo,
+# porque `python:3-alpine` e `Flask` sem versão fixada mudam sozinhos - que é
+# precisamente a tese do estudo de caso.
+
+name: Comparação 2019 vs 2026
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 1 * *" # dia 1 de cada mês, 06:00 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  medir:
+    name: Medir as três imagens
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Instalar Trivy
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq wget gnupg
+          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key \
+            | gpg --dearmor | sudo tee /usr/share/keyrings/trivy.gpg > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" \
+            | sudo tee /etc/apt/sources.list.d/trivy.list > /dev/null
+          sudo apt-get update -qq && sudo apt-get install -y -qq trivy
+
+      - name: Baixar a imagem publicada em 2018
+        run: docker pull cirolini/flask-uwsgi:latest
+
+      # Sem `set -e` no build: se o Dockerfile de 2019 tiver parado de
+      # construir, isso É o resultado da medição, não uma falha do workflow.
+      - name: Construir o Dockerfile de 2019, sem alterar nada
+        id: build2019
+        run: |
+          inicio=$(date +%s)
+          if docker build -t comp:2019 -f 2019/Dockerfile 2019 > build2019.log 2>&1; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::O Dockerfile de 2019 não constrói mais em amd64"
+            tail -40 build2019.log
+          fi
+          echo "segundos=$(( $(date +%s) - inicio ))" >> "$GITHUB_OUTPUT"
+
+      - name: Construir a imagem de 2026
+        id: build2026
+        run: |
+          inicio=$(date +%s)
+          docker build -t comp:2026 2026
+          echo "segundos=$(( $(date +%s) - inicio ))" >> "$GITHUB_OUTPUT"
+
+      - name: Escanear e montar a tabela
+        run: |
+          python3 .github/scripts/comparar.py \
+            --imagem "2018 publicada:cirolini/flask-uwsgi:latest" \
+            --imagem "2019 reconstruída:$([ "${{ steps.build2019.outputs.ok }}" = "true" ] && echo comp:2019 || echo NAO_CONSTROI)" \
+            --imagem "2026:comp:2026" \
+            --build-2019 "${{ steps.build2019.outputs.segundos }}" \
+            --build-2026 "${{ steps.build2026.outputs.segundos }}" \
+            | tee "$GITHUB_STEP_SUMMARY" | tee comparacao.md
+
+      - name: Guardar o resultado
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: comparacao
+          path: |
+            comparacao.md
+            build2019.log
