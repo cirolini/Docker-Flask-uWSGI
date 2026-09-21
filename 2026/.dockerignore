@@ -1,0 +1,31 @@
+# Em 2019 não havia .dockerignore e o Dockerfile fazia `COPY /app /app`:
+# o .git inteiro, os __pycache__ e qualquer arquivo de editor iam junto para
+# dentro da imagem — histórico do repositório publicado sem querer, e a camada
+# invalidada a cada arquivo temporário que aparecesse no diretório.
+
+.git
+.gitignore
+.github
+
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+tests/
+docs/
+*.md
+
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# O requirements-dev.txt não entra na imagem: pytest e ruff são do CI.
+requirements-dev.txt
