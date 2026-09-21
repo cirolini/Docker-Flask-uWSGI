@@ -151,16 +151,23 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }} # token efêmero, escopo do job
 
+      # Publica pelo próprio build-push-action, não por `docker push`. O build
+      # gera um atestado de proveniência (SLSA) junto com a imagem; carregada
+      # no daemon com `load: true` e empurrada com `docker push`, o índice
+      # aponta para blobs do atestado que não existem localmente e o registry
+      # recusa com "unknown blob" - foi exatamente o que aconteceu no primeiro
+      # push para a master. Aqui o build sai inteiro do cache (mesmas camadas
+      # que acabaram de ser escaneadas) e o atestado sobe junto.
       - name: Publicar
         id: push
         if: github.event_name == 'push'
-        run: |
-          set -euo pipefail
-          imagem="${REGISTRY}/${IMAGE_NAME}:sha-${GITHUB_SHA}"
-          docker push "$imagem"
-          digest=$(docker inspect --format '{{index .RepoDigests 0}}' "$imagem" | cut -d@ -f2)
-          echo "digest=$digest" >> "$GITHUB_OUTPUT"
-          echo "Publicado: ${REGISTRY}/${IMAGE_NAME}@${digest}"
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: 2026
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
 
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
         if: github.event_name == 'push'
