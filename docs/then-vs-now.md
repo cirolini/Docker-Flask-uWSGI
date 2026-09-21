@@ -545,6 +545,15 @@ arquivo versionado no lugar, e meu comando de restaurar falhava em silêncio.
 `IMAGE_NAME: ${{ github.repository }}`, que aqui é `cirolini/Docker-Flask-uWSGI`
 — com maiúsculas. Nome de imagem em registry OCI precisa ser minúsculo.
 
+**A publicação falhou no primeiro push para a master.** Nas PRs o pipeline
+passava inteiro, mas publicar e assinar só rodam em push na `master`, então
+esse caminho nunca tinha executado. Quando executou: `unknown blob`. Eu
+carregava a imagem no daemon com `load: true` e publicava com `docker push`;
+o build tinha gerado um atestado de proveniência junto, e o índice apontava
+para blobs que não existiam localmente. Troquei por publicar pelo próprio
+`build-push-action`. Caminho de código que só roda depois do merge é caminho
+não testado — e a única forma de testá-lo foi quebrar a `master`.
+
 **Removi o cabeçalho do `uv` do requirements.txt por estética.** É por ele que
 o Dependabot reconhece arquivo compilado e regera os hashes junto. Sem o
 cabeçalho, ele trocaria a versão e deixaria o hash velho — PR verde, build
