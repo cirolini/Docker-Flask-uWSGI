@@ -1,0 +1,151 @@
+# O equivalente de 2019 está em 2019/k8s_app.yaml: 40 linhas, três réplicas,
+# nenhuma sonda, nenhum limite de recurso, nenhum securityContext, imagem
+# `:latest` de um registry em 127.0.0.1. Aquele pod não sobe num cluster com
+# Pod Security Admission em `restricted` - ele não é apenas inseguro, ele é
+# recusado na admissão.
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flask-hello
+  labels: &rotulos
+    app.kubernetes.io/name: flask-hello
+    app.kubernetes.io/component: web
+    app.kubernetes.io/part-of: docker-flask-uwsgi
+spec:
+  replicas: 3
+
+  # maxUnavailable 0: nenhuma réplica sai antes de a substituta estar pronta.
+  # Em 2019, sem readiness, o rollout trocava os pods e mandava tráfego para
+  # quem ainda estava subindo - cada deploy derrubava requisição.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: flask-hello
+
+  template:
+    metadata:
+      labels: *rotulos
+    spec:
+      # O pod não fala com a API do Kubernetes. Sem isto ele carrega um token
+      # de service account montado e válido - credencial de graça para quem
+      # conseguir execução remota dentro do container.
+      automountServiceAccountToken: false
+
+      # 30s para o gunicorn terminar o que está em voo. O graceful_timeout do
+      # gunicorn.conf.py é 30s: os dois números precisam combinar, senão o
+      # SIGKILL chega antes de o worker terminar.
+      terminationGracePeriodSeconds: 30
+
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+
+      # Três réplicas em um nó só não são alta disponibilidade, são três cópias
+      # do mesmo ponto único de falha. Em 2019 o manifesto pedia replicas: 3 e
+      # deixava o scheduler empilhar as três onde quisesse.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: flask-hello
+
+      containers:
+        - name: app
+          # Digest, não tag. O pipeline substitui esta linha pelo digest exato
+          # que ele acabou de assinar (`make deploy` faz isso com kustomize).
+          # Com `:latest`, como em 2019, `kubectl rollout undo` volta para a
+          # mesma tag - o rollback não reverte nada.
+          image: ghcr.io/cirolini/docker-flask-uwsgi:PLACEHOLDER
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: http
+              containerPort: 5000
+
+          env:
+            # Alinhado ao limite de CPU abaixo. O default do gunicorn.conf.py é
+            # 2*CPU+1, mas a CPU que o container enxerga é a do nó inteiro, não
+            # a do limite do cgroup - sem isto seriam workers demais brigando
+            # por 500m. Era o mesmo defeito do `processes = 5` de 2019, só que
+            # agora explícito.
+            - name: WEB_CONCURRENCY
+              value: "2"
+            - name: LOG_LEVEL
+              value: info
+
+          # Sem limites o pod fica na classe BestEffort: primeiro a ser
+          # despejado sob pressão e sem nenhuma garantia de CPU. Era o caso em
+          # 2019. Request e limit de memória iguais colocam o pod em Guaranteed
+          # para memória, que é o que evita despejo por causa do vizinho.
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 128Mi
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+
+          # Três sondas, três perguntas diferentes - e em 2019 não havia
+          # nenhuma das três.
+          #
+          # startup: "já terminou de subir?" Segura as outras duas enquanto o
+          # app inicializa, então liveness pode ser agressiva sem matar um pod
+          # que só estava começando.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 2
+            failureThreshold: 15
+
+          # liveness: "o processo travou?" Falhar aqui REINICIA o pod, então
+          # ela precisa ser conservadora - uma liveness nervosa transforma
+          # lentidão momentânea em loop de restart.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          # readiness: "pode receber tráfego agora?" Falhar aqui só tira o pod
+          # do Service. É ela que faz o rollout não derrubar requisição.
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 2
+
+          # Com readOnlyRootFilesystem o gunicorn precisa de um lugar gravável
+          # para o heartbeat dos workers (worker_tmp_dir = /dev/shm). Em
+          # memória, não em disco: é heartbeat, não dado.
+          volumeMounts:
+            - name: shm
+              mountPath: /dev/shm
+
+      volumes:
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 64Mi
